@@ -286,8 +286,6 @@ bool cSatipTuner::Disconnect(void)
   statusUpdateM.Set(0);
   timeoutM = eMinKeepAliveIntervalMs;
   pmtPidM = -1;
-  addPidsM.Clear();
-  delPidsM.Clear();
 
   // return always true
   return true;
@@ -485,11 +483,13 @@ bool cSatipTuner::SetPid(int pidP, int typeP, bool onP)
      }
   else {
      pidsM.RemovePid(pidP);
-     delPidsM.AddPid(pidP);
+     if (addPidsM.IndexOf(pidP) == -1)
+        delPidsM.AddPid(pidP);
      addPidsM.RemovePid(pidP);
      }
   debug12("%s (%d, %d, %d) pids=%s [device %d]", __PRETTY_FUNCTION__, pidP, typeP, onP, *pidsM.ListPids(), deviceIdM);
   sleepM.Signal();
+  pidUpdateCacheM.Set(ePidUpdateIntervalMs);
 
   return true;
 }
@@ -498,7 +498,7 @@ bool cSatipTuner::UpdatePids(bool forceP)
 {
   debug16("%s (%d) tunerState=%s [device %d]", __PRETTY_FUNCTION__, forceP, TunerStateString(currentStateM), deviceIdM);
   cMutexLock MutexLock(&mutexM);
-  if (((forceP && pidsM.Size()) || (pidUpdateCacheM.TimedOut() && (addPidsM.Size() || delPidsM.Size()))) &&
+  if ((forceP || (pidUpdateCacheM.TimedOut() && (addPidsM.Size() || delPidsM.Size()))) &&
       !isempty(*streamAddrM) && (streamIdM > 0)) {
      cString uri = cString::sprintf("%sstream=%d", *GetBaseUrl(*streamAddrM, streamPortM), streamIdM);
      bool useci = (SatipConfig.GetCIExtension() && currentServerM.HasCI());
@@ -510,17 +510,17 @@ bool cSatipTuner::UpdatePids(bool forceP)
            if (usedummy && (pidsM.Size() == 1) && (pidsM[0] < 0x20))
               uri = cString::sprintf("%s,%d", *uri, eDummyPid);
            paramadded = true;
+           addPidsM.Clear();
+           delPidsM.Clear();
            }
         }
-     else {
-        if (addPidsM.Size()) {
-           uri = cString::sprintf("%s%saddpids=%s", *uri, paramadded ? "&" : "?", *addPidsM.ListPids());
-           paramadded = true;
-           }
-        if (delPidsM.Size()) {
-           uri = cString::sprintf("%s%sdelpids=%s", *uri, paramadded ? "&" : "?", *delPidsM.ListPids());
-           paramadded = true;
-           }
+     if (addPidsM.Size()) {
+        uri = cString::sprintf("%s%saddpids=%s", *uri, paramadded ? "&" : "?", *addPidsM.ListPids());
+        paramadded = true;
+        }
+     if (delPidsM.Size()) {
+        uri = cString::sprintf("%s%sdelpids=%s", *uri, paramadded ? "&" : "?", *delPidsM.ListPids());
+        paramadded = true;
         }
      if (useci) {
         if (currentServerM.IsQuirk(cSatipServer::eSatipQuirkCiXpmt)) {
@@ -551,7 +551,8 @@ bool cSatipTuner::UpdatePids(bool forceP)
            tnrParamM = param;
            }
         }
-     pidUpdateCacheM.Set(ePidUpdateIntervalMs);
+     if (!paramadded)
+        return true;
      if (!rtspM.Play(*uri))
         return false;
      addPidsM.Clear();
